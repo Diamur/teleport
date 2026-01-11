@@ -310,6 +310,7 @@
                     dbg("MEDIA enumerateDevices counts", counts);
                     if (counts.audioinput === 0) {
                         addLine("⚠️ В системе нет устройства ввода (audioinput=0)");
+                        return null;
                     }
                 } catch (e) {
                     err("MEDIA enumerateDevices fail", e);
@@ -338,9 +339,6 @@
             }
 
             addLine("⚠️ " + message);
-            if (name !== "NotAllowedError" && name !== "PermissionDeniedError") {
-                addLine("⚠️ Микрофон не найден / не доступен. Проверь устройство, разрешения сайта и настройки Windows/Chrome.");
-            }
 
             if (!micHelpShown) {
                 micHelpShown = true;
