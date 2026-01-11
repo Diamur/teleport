@@ -3,7 +3,27 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/_lib.php';
 
-$me = get_me_or_401();
+$emptyResponse = [
+  'ok' => false,
+  'error' => 'not_authorized',
+  'me' => null,
+  'users' => [],
+  'onlineCount' => 0,
+];
+
+start_session();
+$login = $_SESSION['login'] ?? '';
+if (!is_string($login) || trim($login) === '') {
+  json_out($emptyResponse);
+}
+$login = safe_str($login, MAX_LOGIN_LEN);
+if ($login === '') {
+  json_out($emptyResponse);
+}
+
+$sid = session_id();
+mark_session_active($login, $sid);
+$me = ['login' => $login, 'sid' => $sid];
 $users = read_users();
 $onlineMap = get_online_map();
 

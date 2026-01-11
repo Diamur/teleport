@@ -666,6 +666,18 @@
             const data = await apiFetch("/users.php");
             dbg("USERS data", data);
 
+            if (!data.ok) {
+                dbg("USERS not authorized -> force logout UI", { error: data.error });
+
+                // разлогин
+                stopTimers();
+                appView.hidden = true;
+                loginView.hidden = false;
+                me = null;
+                setWsState("offline", false);
+                return;
+            }
+
             onlineInfo.textContent = "онлайн: " + data.onlineCount;
             renderUsers(data.users);
         } catch (e) {
@@ -849,6 +861,14 @@
         try {
             dbg("BOOT try auto-session (/users.php)");
             const data = await apiFetch("/users.php");
+
+            if (!data.ok) {
+                dbg("BOOT auto-session not authorized -> show login", { error: data.error });
+
+                loginView.hidden = false;
+                appView.hidden = true;
+                return;
+            }
 
             dbg("BOOT auto-session ok", data);
 
