@@ -181,6 +181,7 @@
     // peer connections per user
     const peers = new Map(); // login -> { pc }
     let localStream = null;
+    let micHelpShown = false;
 
     function wsUrl() {
         const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -296,6 +297,25 @@
         dbg("MEDIA getUserMedia request", { audio: true, video: false });
 
         try {
+            if (navigator.mediaDevices?.enumerateDevices) {
+                try {
+                    const devices = await navigator.mediaDevices.enumerateDevices();
+                    const counts = devices.reduce(
+                        (acc, device) => {
+                            acc[device.kind] = (acc[device.kind] || 0) + 1;
+                            return acc;
+                        },
+                        { audioinput: 0, audiooutput: 0, videoinput: 0 }
+                    );
+                    dbg("MEDIA enumerateDevices counts", counts);
+                    if (counts.audioinput === 0) {
+                        addLine("⚠️ В системе нет устройства ввода (audioinput=0)");
+                    }
+                } catch (e) {
+                    err("MEDIA enumerateDevices fail", e);
+                }
+            }
+
             localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
             addLine("🎙️ Микрофон получен");
             dbg("MEDIA getUserMedia ok", {
@@ -304,7 +324,33 @@
             return localStream;
         } catch (e) {
             err("MEDIA getUserMedia fail", e);
-            throw e;
+            const name = e && e.name ? e.name : "";
+            let message = "Микрофон не найден / не доступен. Проверь устройство, разрешения сайта и настройки Windows/Chrome.";
+
+            if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+                message = "Нет разрешения на микрофон";
+            } else if (name === "NotFoundError") {
+                message = "Микрофон не найден";
+            } else if (name === "NotReadableError" || name === "AbortError") {
+                message = "Устройство занято/недоступно";
+            } else if (name === "SecurityError") {
+                message = "Нужен HTTPS/безопасный контекст";
+            }
+
+            addLine("⚠️ " + message);
+            if (name !== "NotAllowedError" && name !== "PermissionDeniedError") {
+                addLine("⚠️ Микрофон не найден / не доступен. Проверь устройство, разрешения сайта и настройки Windows/Chrome.");
+            }
+
+            if (!micHelpShown) {
+                micHelpShown = true;
+                addLine("ℹ️ Если микрофон недоступен, попробуйте:");
+                addLine("1) Нажмите значок замка в адресной строке → Разрешить микрофон");
+                addLine("2) Откройте chrome://settings/content/microphone и выберите устройство");
+                addLine("3) Windows: Настройки → Конфиденциальность → Микрофон → разрешить доступ");
+            }
+
+            return null;
         }
     }
 
@@ -346,6 +392,10 @@
         }
 
         const stream = await ensureLocalStream();
+        if (!stream) {
+            err("RTC createPeer() blocked: no localStream", login);
+            return null;
+        }
 
         dbg("RTC creating RTCPeerConnection", login);
         const pc = new RTCPeerConnection({
@@ -404,13 +454,44 @@
             return;
         }
 
-        const { pc } = await createPeer(login);
+        let ref;
+        try {
+            ref = await createPeer(login);
+        } catch (e) {
+            err("CALL startCallTo() createPeer fail", e);
+            addLine("⚠️ Не удалось начать звонок: микрофон недоступен");
+            renderUsers(lastUsers);
+            return;
+        }
+
+        if (!ref) {
+            addLine("⚠️ Звонок отменён: микрофон недоступен");
+            renderUsers(lastUsers);
+            return;
+        }
+
+        const { pc } = ref;
 
         dbg("CALL createOffer()", login);
-        const offer = await pc.createOffer();
+        let offer;
+        try {
+            offer = await pc.createOffer();
+        } catch (e) {
+            err("CALL createOffer() fail", e);
+            addLine("⚠️ Не удалось создать offer — звонок отменён");
+            renderUsers(lastUsers);
+            return;
+        }
 
         dbg("CALL setLocalDescription(offer)", { login, sdpType: offer.type });
-        await pc.setLocalDescription(offer);
+        try {
+            await pc.setLocalDescription(offer);
+        } catch (e) {
+            err("CALL setLocalDescription(offer) fail", e);
+            addLine("⚠️ Не удалось установить локальное описание — звонок отменён");
+            renderUsers(lastUsers);
+            return;
+        }
 
         wsSend({ type: "webrtc", payload: { t: "offer", from: me, to: login, sdp: offer } });
         addLine("📤 offer -> " + login);
@@ -422,7 +503,12 @@
         dbg("CALL onOffer()", { from, hasSdp: !!sdp });
 
         addLine("📥 offer <- " + from);
-        const { pc } = await createPeer(from);
+        const ref = await createPeer(from);
+        if (!ref) {
+            addLine("⚠️ Не удалось принять звонок от " + from + ": микрофон недоступен");
+            return;
+        }
+        const { pc } = ref;
 
         dbg("CALL setRemoteDescription(offer)", from);
         await pc.setRemoteDescription(sdp);
