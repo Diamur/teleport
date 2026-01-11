@@ -41,6 +41,7 @@
     const usersBody = $("usersBody");
     const logEl = $("log");
     const confInfo = $("confInfo");
+    const logToggle = $("logToggle");
 
     const btnConf = $("btnConf");
     const btnHangupAll = $("btnHangupAll");
@@ -83,6 +84,11 @@
         loginError.textContent = msg || "";
         if (msg) err("LOGIN_ERROR_UI", msg);
         else dbg("LOGIN_ERROR_UI cleared");
+    }
+
+    function updateLogToggleLabel(isCollapsed) {
+        if (!logToggle) return;
+        logToggle.textContent = isCollapsed ? "Лог (показать)" : "Лог (скрыть)";
     }
 
     async function apiFetch(path, options = {}) {
@@ -658,6 +664,7 @@
 
             // conf checkbox
             const tdSel = document.createElement("td");
+            tdSel.className = "col-select";
             const cb = document.createElement("input");
             cb.type = "checkbox";
             cb.className = "checkbox";
@@ -674,13 +681,22 @@
             tdSel.appendChild(cb);
 
             const tdUser = document.createElement("td");
-            tdUser.textContent = u.login;
+            tdUser.className = "user-cell";
+            const userName = document.createElement("span");
+            userName.className = "user-name";
+            userName.textContent = u.login;
 
             const tdStatus = document.createElement("td");
+            tdStatus.className = "status-cell";
             const tag = document.createElement("span");
             tag.className = "tag " + (u.status === "online" ? "on" : "off");
             tag.textContent = (u.status === "online" ? "в сети" : "не в сети");
             tdStatus.appendChild(tag);
+            const tagMobile = document.createElement("span");
+            tagMobile.className = tag.className + " status-chip-mobile";
+            tagMobile.textContent = tag.textContent;
+            tdUser.appendChild(userName);
+            tdUser.appendChild(tagMobile);
 
             // call
             const tdCall = document.createElement("td");
@@ -689,7 +705,7 @@
             callBtn.textContent = connected ? "Отключить" : "Позвонить";
             callBtn.disabled = (u.status !== "online") && !connected;
 
-            callBtn.className = connected ? "btn-danger" : "btn-primary";
+            callBtn.className = connected ? "btn-danger btn-full" : "btn-primary btn-full";
             callBtn.onclick = async () => {
                 dbg("UI call button click", { login: u.login, connected, status: u.status });
 
@@ -706,6 +722,7 @@
             const addBtn = document.createElement("button");
             addBtn.textContent = selectedForConf.has(u.login) ? "Убрать" : "Добавить";
             addBtn.disabled = (u.status !== "online");
+            addBtn.className = "btn-full";
             addBtn.onclick = () => {
                 dbg("UI conf add/remove click", { login: u.login });
 
@@ -907,6 +924,15 @@
         dbg("UI btnLogout click");
         doLogout();
     };
+
+    if (logToggle) {
+        logToggle.onclick = () => {
+            dbg("UI logToggle click");
+            const isCollapsed = appView.classList.toggle("log-collapsed");
+            updateLogToggleLabel(isCollapsed);
+        };
+        updateLogToggleLabel(false);
+    }
 
     passInput.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
