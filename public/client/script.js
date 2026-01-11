@@ -40,6 +40,7 @@
     const onlineInfo = $("onlineInfo");
     const usersBody = $("usersBody");
     const logEl = $("log");
+    const logToggle = $("logToggle");
     const confInfo = $("confInfo");
 
     const btnConf = $("btnConf");
@@ -83,6 +84,12 @@
         loginError.textContent = msg || "";
         if (msg) err("LOGIN_ERROR_UI", msg);
         else dbg("LOGIN_ERROR_UI cleared");
+    }
+
+    function setLogCollapsed(collapsed) {
+        if (!logToggle) return;
+        logEl.classList.toggle("is-collapsed", collapsed);
+        logToggle.textContent = collapsed ? "Показать лог" : "Свернуть лог";
     }
 
     async function apiFetch(path, options = {}) {
@@ -809,6 +816,27 @@
         dbg("UI btnHangupAll click");
         hangupAll();
     };
+
+    if (logToggle) {
+        let logCollapsed = false;
+        const logMedia = window.matchMedia("(max-width: 768px)");
+        if (logMedia.matches) {
+            logCollapsed = true;
+            setLogCollapsed(true);
+        }
+
+        logToggle.onclick = () => {
+            logCollapsed = !logCollapsed;
+            setLogCollapsed(logCollapsed);
+        };
+
+        logMedia.addEventListener("change", (e) => {
+            if (!e.matches) {
+                logCollapsed = false;
+                setLogCollapsed(false);
+            }
+        });
+    }
 
     // ---- Login / Logout ----
     async function doLogin() {
