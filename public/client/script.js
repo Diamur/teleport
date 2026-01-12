@@ -46,6 +46,10 @@
     const btnConf = $("btnConf");
     const btnHangupAll = $("btnHangupAll");
     const btnLogout = $("btnLogout");
+    const incomingModal = $("incomingModal");
+    const incomingFrom = $("incomingFrom");
+    const acceptBtn = $("acceptBtn");
+    const rejectBtn = $("rejectBtn");
 
     const API = "../api";
 
@@ -188,6 +192,7 @@
     const peers = new Map(); // login -> { pc }
     let localStream = null;
     let micHelpShown = false;
+    let pendingIncomingCall = null;
 
     function wsUrl() {
         const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -276,7 +281,19 @@
                     return;
                 }
                 if (p.t === "hangup") {
-                    addLine("⛔ " + from + " завершил звонок");
+                    if (pendingIncomingCall && pendingIncomingCall.from === from) {
+                        addLine("☎️ Звонок отменён пользователем " + from);
+                        pendingIncomingCall = null;
+                        hideIncomingModal();
+                    } else {
+                        addLine("⛔ " + from + " завершил звонок");
+                    }
+                    cleanupPeer(from);
+                    renderUsers(lastUsers);
+                    return;
+                }
+                if (p.t === "reject") {
+                    addLine("⛔ Звонок отклонён пользователем " + from);
                     cleanupPeer(from);
                     renderUsers(lastUsers);
                     return;
@@ -292,6 +309,20 @@
         }
         dbg("WS -> send", obj);
         ws.send(JSON.stringify(obj));
+    }
+
+    function showIncomingModal(from) {
+        if (!incomingModal || !incomingFrom) return;
+        incomingFrom.textContent = from || "";
+        incomingModal.hidden = false;
+        dbg("UI showIncomingModal", { from });
+    }
+
+    function hideIncomingModal() {
+        if (!incomingModal) return;
+        incomingModal.hidden = true;
+        if (incomingFrom) incomingFrom.textContent = "";
+        dbg("UI hideIncomingModal");
     }
 
     async function ensureLocalStream() {
@@ -506,10 +537,40 @@
     async function onOffer(from, sdp) {
         dbg("CALL onOffer()", { from, hasSdp: !!sdp });
 
-        addLine("📥 offer <- " + from);
+        if (pendingIncomingCall) {
+            if (pendingIncomingCall.from === from) {
+                dbg("CALL onOffer(): duplicate offer ignored", { from });
+                return;
+            }
+            addLine("⛔ Входящий звонок от " + from + " отклонён: занято");
+            wsSend({ type: "webrtc", payload: { t: "reject", from: me, to: from } });
+            return;
+        }
+
+        if (peers.has(from)) {
+            addLine("⛔ Входящий звонок от " + from + " отклонён: уже есть соединение");
+            wsSend({ type: "webrtc", payload: { t: "reject", from: me, to: from } });
+            return;
+        }
+
+        pendingIncomingCall = { from, sdp, ts: Date.now() };
+        addLine("📥 Входящий звонок от " + from);
+        showIncomingModal(from);
+    }
+
+    async function acceptIncomingCall() {
+        if (!pendingIncomingCall) return;
+
+        const { from, sdp } = pendingIncomingCall;
+        pendingIncomingCall = null;
+        hideIncomingModal();
+
+        addLine("✅ Принят звонок от " + from);
+
         const ref = await createPeer(from);
         if (!ref) {
             addLine("⚠️ Не удалось принять звонок от " + from + ": микрофон недоступен");
+            wsSend({ type: "webrtc", payload: { t: "reject", from: me, to: from } });
             return;
         }
         const { pc } = ref;
@@ -527,6 +588,17 @@
         addLine("📤 answer -> " + from);
 
         renderUsers(lastUsers);
+    }
+
+    function rejectIncomingCall() {
+        if (!pendingIncomingCall) return;
+
+        const { from } = pendingIncomingCall;
+        pendingIncomingCall = null;
+        hideIncomingModal();
+
+        addLine("⛔ Входящий звонок отклонён: " + from);
+        wsSend({ type: "webrtc", payload: { t: "reject", from: me, to: from } });
     }
 
     async function onAnswer(from, sdp) {
@@ -827,6 +899,20 @@
         hangupAll();
     };
 
+    if (acceptBtn) {
+        acceptBtn.onclick = () => {
+            dbg("UI acceptBtn click");
+            acceptIncomingCall();
+        };
+    }
+
+    if (rejectBtn) {
+        rejectBtn.onclick = () => {
+            dbg("UI rejectBtn click");
+            rejectIncomingCall();
+        };
+    }
+
     // ---- Login / Logout ----
     async function doLogin() {
         dbg("AUTH doLogin()");
@@ -901,6 +987,8 @@
 
         for (const u of Array.from(peers.keys())) cleanupPeer(u);
         selectedForConf.clear();
+        pendingIncomingCall = null;
+        hideIncomingModal();
 
         appView.hidden = true;
         loginView.hidden = false;

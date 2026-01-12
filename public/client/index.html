@@ -55,6 +55,11 @@
     .btn-full { width: 100%; }
     .table-card { width:100%; border-collapse: collapse; }
     .users-empty { padding: 10px 0; color: var(--muted); }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(5, 7, 12, 0.75); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 20; }
+    .modal-card { width: 100%; max-width: 420px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px; box-shadow: 0 20px 45px rgba(0, 0, 0, 0.35); }
+    .modal-title { font-weight: 600; font-size: 18px; margin: 0 0 14px; }
+    .incoming-actions { display: flex; gap: 10px; }
+    .incoming-actions button { flex: 1; min-height: 44px; }
 
     @media (max-width: 768px) {
       .wrap { padding: 12px; }
@@ -76,6 +81,8 @@
       .checkbox { width:22px; height:22px; }
       .row input, .row button { width:100%; }
       .row input { min-height: 44px; }
+      .incoming-actions { flex-direction: column; width: 100%; }
+      .incoming-actions button { width: 100%; }
     }
 
     @media (max-width: 420px) {
@@ -151,6 +158,16 @@
       <div id="log"></div>
 
       <div id="remoteAudios" hidden></div>
+    </div>
+  </div>
+
+  <div id="incomingModal" class="modal-overlay" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="incomingTitle">
+      <div id="incomingTitle" class="modal-title">Входящий звонок от <span id="incomingFrom"></span></div>
+      <div class="incoming-actions">
+        <button id="acceptBtn" class="btn-primary">Принять</button>
+        <button id="rejectBtn" class="btn-danger">Отклонить</button>
+      </div>
     </div>
   </div>
 
