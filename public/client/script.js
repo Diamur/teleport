@@ -42,6 +42,7 @@
     const logEl = $("log");
     const confInfo = $("confInfo");
     const logToggle = $("logToggle");
+    const remoteAudios = $("remoteAudios");
 
     const btnConf = $("btnConf");
     const btnHangupAll = $("btnHangupAll");
@@ -410,7 +411,14 @@
     function createRemoteAudio(login) {
         dbg("AUDIO createRemoteAudio()", login);
 
-        const container = document.getElementById("remoteAudios");
+        let container = remoteAudios || document.getElementById("remoteAudios");
+        if (!container && appView) {
+            container = document.createElement("div");
+            container.id = "remoteAudios";
+            container.hidden = true;
+            appView.appendChild(container);
+            dbg("AUDIO remoteAudios container created", login);
+        }
         if (!container) {
             err("AUDIO createRemoteAudio(): container missing", login);
             return null;
