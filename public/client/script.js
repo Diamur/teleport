@@ -431,6 +431,8 @@
             el.id = "remoteAudio_" + login;
             el.autoplay = true;
             el.controls = true;
+            el.playsInline = true;
+            el.muted = false;
             el.style.width = "100%";
             el.style.marginTop = "8px";
 
@@ -501,6 +503,9 @@
             const audio = createRemoteAudio(login);
             if (!audio) return;
             audio.srcObject = ev.streams[0];
+            audio.play().catch((e) => {
+                err("AUDIO play failed", { login, error: String(e) });
+            });
             addLine("🔊 Удалённый звук: " + login);
         };
 
