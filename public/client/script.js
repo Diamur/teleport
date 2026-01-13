@@ -193,6 +193,7 @@
     let localStream = null;
     let micHelpShown = false;
     let pendingIncomingCall = null;
+    const pendingIce = new Map(); // login -> [candidate]
 
     function wsUrl() {
         const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -284,6 +285,7 @@
                     if (pendingIncomingCall && pendingIncomingCall.from === from) {
                         addLine("☎️ Звонок отменён пользователем " + from);
                         pendingIncomingCall = null;
+                        pendingIce.delete(from);
                         hideIncomingModal();
                     } else {
                         addLine("⛔ " + from + " завершил звонок");
@@ -294,6 +296,7 @@
                 }
                 if (p.t === "reject") {
                     addLine("⛔ Звонок отклонён пользователем " + from);
+                    pendingIce.delete(from);
                     cleanupPeer(from);
                     renderUsers(lastUsers);
                     return;
@@ -584,6 +587,20 @@
         dbg("CALL setLocalDescription(answer)", { from, sdpType: answer.type });
         await pc.setLocalDescription(answer);
 
+        const queued = pendingIce.get(from);
+        if (queued && queued.length) {
+            dbg("RTC apply queued ICE", { from, count: queued.length });
+            for (const candidate of queued) {
+                try {
+                    // eslint-disable-next-line no-await-in-loop
+                    await pc.addIceCandidate(candidate);
+                } catch (e) {
+                    err("RTC addIceCandidate fail (queued)", { from, error: String(e) });
+                }
+            }
+        }
+        pendingIce.delete(from);
+
         wsSend({ type: "webrtc", payload: { t: "answer", from: me, to: from, sdp: answer } });
         addLine("📤 answer -> " + from);
 
@@ -595,6 +612,7 @@
 
         const { from } = pendingIncomingCall;
         pendingIncomingCall = null;
+        pendingIce.delete(from);
         hideIncomingModal();
 
         addLine("⛔ Входящий звонок отклонён: " + from);
@@ -632,6 +650,13 @@
 
         const ref = peers.get(from);
         if (!ref) {
+            if (pendingIncomingCall && pendingIncomingCall.from === from) {
+                const queued = pendingIce.get(from) || [];
+                queued.push(candidate);
+                pendingIce.set(from, queued);
+                dbg("RTC onIce(): queued (pending accept)", { from, queued: queued.length });
+                return;
+            }
             err("RTC onIce(): peer not found", from);
             return;
         }
@@ -988,6 +1013,7 @@
         for (const u of Array.from(peers.keys())) cleanupPeer(u);
         selectedForConf.clear();
         pendingIncomingCall = null;
+        pendingIce.clear();
         hideIncomingModal();
 
         appView.hidden = true;
