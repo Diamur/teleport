@@ -42,10 +42,15 @@
     const logEl = $("log");
     const confInfo = $("confInfo");
     const logToggle = $("logToggle");
+    const remoteAudios = $("remoteAudios");
 
     const btnConf = $("btnConf");
     const btnHangupAll = $("btnHangupAll");
     const btnLogout = $("btnLogout");
+    const incomingModal = $("incomingModal");
+    const incomingFrom = $("incomingFrom");
+    const acceptBtn = $("acceptBtn");
+    const rejectBtn = $("rejectBtn");
 
     const API = "../api";
 
@@ -188,6 +193,8 @@
     const peers = new Map(); // login -> { pc }
     let localStream = null;
     let micHelpShown = false;
+    let pendingIncomingCall = null;
+    const pendingIce = new Map(); // login -> [candidate]
 
     function wsUrl() {
         const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -276,7 +283,21 @@
                     return;
                 }
                 if (p.t === "hangup") {
-                    addLine("⛔ " + from + " завершил звонок");
+                    if (pendingIncomingCall && pendingIncomingCall.from === from) {
+                        addLine("☎️ Звонок отменён пользователем " + from);
+                        pendingIncomingCall = null;
+                        pendingIce.delete(from);
+                        hideIncomingModal();
+                    } else {
+                        addLine("⛔ " + from + " завершил звонок");
+                    }
+                    cleanupPeer(from);
+                    renderUsers(lastUsers);
+                    return;
+                }
+                if (p.t === "reject") {
+                    addLine("⛔ Звонок отклонён пользователем " + from);
+                    pendingIce.delete(from);
                     cleanupPeer(from);
                     renderUsers(lastUsers);
                     return;
@@ -292,6 +313,35 @@
         }
         dbg("WS -> send", obj);
         ws.send(JSON.stringify(obj));
+    }
+
+    function showIncomingModal(from) {
+        if (!incomingModal || !incomingFrom) return;
+        incomingFrom.textContent = from || "";
+        incomingModal.hidden = false;
+        dbg("UI showIncomingModal", { from });
+    }
+
+    function hideIncomingModal() {
+        if (!incomingModal) return;
+        incomingModal.hidden = true;
+        if (incomingFrom) incomingFrom.textContent = "";
+        dbg("UI hideIncomingModal");
+    }
+
+    async function flushPendingIce(login, pc) {
+        const queued = pendingIce.get(login);
+        if (!queued || queued.length === 0) return;
+        dbg("RTC apply queued ICE", { login, count: queued.length });
+        for (const candidate of queued) {
+            try {
+                // eslint-disable-next-line no-await-in-loop
+                await pc.addIceCandidate(candidate);
+            } catch (e) {
+                err("RTC addIceCandidate fail (queued)", { login, error: String(e) });
+            }
+        }
+        pendingIce.delete(login);
     }
 
     async function ensureLocalStream() {
@@ -361,7 +411,18 @@
     function createRemoteAudio(login) {
         dbg("AUDIO createRemoteAudio()", login);
 
-        const container = document.getElementById("remoteAudios");
+        let container = remoteAudios || document.getElementById("remoteAudios");
+        if (!container && appView) {
+            container = document.createElement("div");
+            container.id = "remoteAudios";
+            container.hidden = true;
+            appView.appendChild(container);
+            dbg("AUDIO remoteAudios container created", login);
+        }
+        if (!container) {
+            err("AUDIO createRemoteAudio(): container missing", login);
+            return null;
+        }
         container.hidden = false;
 
         let el = document.getElementById("remoteAudio_" + login);
@@ -370,6 +431,8 @@
             el.id = "remoteAudio_" + login;
             el.autoplay = true;
             el.controls = true;
+            el.playsInline = true;
+            el.muted = false;
             el.style.width = "100%";
             el.style.marginTop = "8px";
 
@@ -438,7 +501,11 @@
         pc.ontrack = (ev) => {
             dbg("RTC ontrack", { login, streams: ev.streams?.length, track: { kind: ev.track?.kind } });
             const audio = createRemoteAudio(login);
+            if (!audio) return;
             audio.srcObject = ev.streams[0];
+            audio.play().catch((e) => {
+                err("AUDIO play failed", { login, error: String(e) });
+            });
             addLine("🔊 Удалённый звук: " + login);
         };
 
@@ -506,16 +573,47 @@
     async function onOffer(from, sdp) {
         dbg("CALL onOffer()", { from, hasSdp: !!sdp });
 
-        addLine("📥 offer <- " + from);
+        if (pendingIncomingCall) {
+            if (pendingIncomingCall.from === from) {
+                dbg("CALL onOffer(): duplicate offer ignored", { from });
+                return;
+            }
+            addLine("⛔ Входящий звонок от " + from + " отклонён: занято");
+            wsSend({ type: "webrtc", payload: { t: "reject", from: me, to: from } });
+            return;
+        }
+
+        if (peers.has(from)) {
+            addLine("⛔ Входящий звонок от " + from + " отклонён: уже есть соединение");
+            wsSend({ type: "webrtc", payload: { t: "reject", from: me, to: from } });
+            return;
+        }
+
+        pendingIncomingCall = { from, sdp, ts: Date.now() };
+        addLine("📥 Входящий звонок от " + from);
+        showIncomingModal(from);
+    }
+
+    async function acceptIncomingCall() {
+        if (!pendingIncomingCall) return;
+
+        const { from, sdp } = pendingIncomingCall;
+        pendingIncomingCall = null;
+        hideIncomingModal();
+
+        addLine("✅ Принят звонок от " + from);
+
         const ref = await createPeer(from);
         if (!ref) {
             addLine("⚠️ Не удалось принять звонок от " + from + ": микрофон недоступен");
+            wsSend({ type: "webrtc", payload: { t: "reject", from: me, to: from } });
             return;
         }
         const { pc } = ref;
 
         dbg("CALL setRemoteDescription(offer)", from);
         await pc.setRemoteDescription(sdp);
+        await flushPendingIce(from, pc);
 
         dbg("CALL createAnswer()", from);
         const answer = await pc.createAnswer();
@@ -527,6 +625,18 @@
         addLine("📤 answer -> " + from);
 
         renderUsers(lastUsers);
+    }
+
+    function rejectIncomingCall() {
+        if (!pendingIncomingCall) return;
+
+        const { from } = pendingIncomingCall;
+        pendingIncomingCall = null;
+        pendingIce.delete(from);
+        hideIncomingModal();
+
+        addLine("⛔ Входящий звонок отклонён: " + from);
+        wsSend({ type: "webrtc", payload: { t: "reject", from: me, to: from } });
     }
 
     async function onAnswer(from, sdp) {
@@ -550,6 +660,7 @@
 
         dbg("CALL setRemoteDescription(answer)", from);
         await pc.setRemoteDescription(sdp);
+        await flushPendingIce(from, pc);
 
         renderUsers(lastUsers);
     }
@@ -560,7 +671,22 @@
 
         const ref = peers.get(from);
         if (!ref) {
+            if (pendingIncomingCall && pendingIncomingCall.from === from) {
+                const queued = pendingIce.get(from) || [];
+                queued.push(candidate);
+                pendingIce.set(from, queued);
+                dbg("RTC onIce(): queued (pending accept)", { from, queued: queued.length });
+                return;
+            }
             err("RTC onIce(): peer not found", from);
+            return;
+        }
+
+        if (!ref.pc.remoteDescription) {
+            const queued = pendingIce.get(from) || [];
+            queued.push(candidate);
+            pendingIce.set(from, queued);
+            dbg("RTC onIce(): queued (no remoteDescription)", { from, queued: queued.length });
             return;
         }
 
@@ -575,6 +701,7 @@
 
     function cleanupPeer(login) {
         dbg("RTC cleanupPeer()", login);
+        pendingIce.delete(login);
 
         const ref = peers.get(login);
         if (!ref) {
@@ -827,6 +954,20 @@
         hangupAll();
     };
 
+    if (acceptBtn) {
+        acceptBtn.onclick = () => {
+            dbg("UI acceptBtn click");
+            acceptIncomingCall();
+        };
+    }
+
+    if (rejectBtn) {
+        rejectBtn.onclick = () => {
+            dbg("UI rejectBtn click");
+            rejectIncomingCall();
+        };
+    }
+
     // ---- Login / Logout ----
     async function doLogin() {
         dbg("AUTH doLogin()");
@@ -901,6 +1042,9 @@
 
         for (const u of Array.from(peers.keys())) cleanupPeer(u);
         selectedForConf.clear();
+        pendingIncomingCall = null;
+        pendingIce.clear();
+        hideIncomingModal();
 
         appView.hidden = true;
         loginView.hidden = false;
