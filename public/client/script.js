@@ -328,6 +328,21 @@
         dbg("UI hideIncomingModal");
     }
 
+    async function flushPendingIce(login, pc) {
+        const queued = pendingIce.get(login);
+        if (!queued || queued.length === 0) return;
+        dbg("RTC apply queued ICE", { login, count: queued.length });
+        for (const candidate of queued) {
+            try {
+                // eslint-disable-next-line no-await-in-loop
+                await pc.addIceCandidate(candidate);
+            } catch (e) {
+                err("RTC addIceCandidate fail (queued)", { login, error: String(e) });
+            }
+        }
+        pendingIce.delete(login);
+    }
+
     async function ensureLocalStream() {
         if (localStream) {
             dbg("MEDIA reuse localStream");
@@ -396,6 +411,10 @@
         dbg("AUDIO createRemoteAudio()", login);
 
         const container = document.getElementById("remoteAudios");
+        if (!container) {
+            err("AUDIO createRemoteAudio(): container missing", login);
+            return null;
+        }
         container.hidden = false;
 
         let el = document.getElementById("remoteAudio_" + login);
@@ -472,6 +491,7 @@
         pc.ontrack = (ev) => {
             dbg("RTC ontrack", { login, streams: ev.streams?.length, track: { kind: ev.track?.kind } });
             const audio = createRemoteAudio(login);
+            if (!audio) return;
             audio.srcObject = ev.streams[0];
             addLine("🔊 Удалённый звук: " + login);
         };
@@ -580,26 +600,13 @@
 
         dbg("CALL setRemoteDescription(offer)", from);
         await pc.setRemoteDescription(sdp);
+        await flushPendingIce(from, pc);
 
         dbg("CALL createAnswer()", from);
         const answer = await pc.createAnswer();
 
         dbg("CALL setLocalDescription(answer)", { from, sdpType: answer.type });
         await pc.setLocalDescription(answer);
-
-        const queued = pendingIce.get(from);
-        if (queued && queued.length) {
-            dbg("RTC apply queued ICE", { from, count: queued.length });
-            for (const candidate of queued) {
-                try {
-                    // eslint-disable-next-line no-await-in-loop
-                    await pc.addIceCandidate(candidate);
-                } catch (e) {
-                    err("RTC addIceCandidate fail (queued)", { from, error: String(e) });
-                }
-            }
-        }
-        pendingIce.delete(from);
 
         wsSend({ type: "webrtc", payload: { t: "answer", from: me, to: from, sdp: answer } });
         addLine("📤 answer -> " + from);
@@ -640,6 +647,7 @@
 
         dbg("CALL setRemoteDescription(answer)", from);
         await pc.setRemoteDescription(sdp);
+        await flushPendingIce(from, pc);
 
         renderUsers(lastUsers);
     }
@@ -661,6 +669,14 @@
             return;
         }
 
+        if (!ref.pc.remoteDescription) {
+            const queued = pendingIce.get(from) || [];
+            queued.push(candidate);
+            pendingIce.set(from, queued);
+            dbg("RTC onIce(): queued (no remoteDescription)", { from, queued: queued.length });
+            return;
+        }
+
         try {
             await ref.pc.addIceCandidate(candidate);
             dbg("RTC addIceCandidate ok", from);
@@ -672,6 +688,7 @@
 
     function cleanupPeer(login) {
         dbg("RTC cleanupPeer()", login);
+        pendingIce.delete(login);
 
         const ref = peers.get(login);
         if (!ref) {
