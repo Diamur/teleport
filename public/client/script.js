@@ -194,6 +194,7 @@
     let localStream = null;
     let micHelpShown = false;
     let pendingIncomingCall = null;
+    let activeConference = null;
     const pendingIce = new Map(); // login -> [candidate]
 
     function wsUrl() {
@@ -270,6 +271,10 @@
                     return;
                 }
 
+                if (p.t === "conf") {
+                    await handleConferenceInvite(from, p.members || []);
+                    return;
+                }
                 if (p.t === "offer") {
                     await onOffer(from, p.sdp);
                     return;
@@ -313,6 +318,56 @@
         }
         dbg("WS -> send", obj);
         ws.send(JSON.stringify(obj));
+    }
+
+    function normalizeConferenceMembers(rawMembers) {
+        if (!Array.isArray(rawMembers)) return [];
+        const unique = new Set();
+        for (const member of rawMembers) {
+            if (typeof member !== "string") continue;
+            const trimmed = member.trim();
+            if (!trimmed) continue;
+            unique.add(trimmed);
+        }
+        return Array.from(unique);
+    }
+
+    function shouldInitiateConferenceCall(meLogin, otherLogin, initiator) {
+        if (!otherLogin || otherLogin === meLogin) return false;
+        if (initiator && otherLogin === initiator) return false;
+        return meLogin.localeCompare(otherLogin, "ru") < 0;
+    }
+
+    async function handleConferenceInvite(initiator, members) {
+        if (!wsReady) {
+            dbg("CONF invite ignored: wsReady=false");
+            return;
+        }
+
+        const normalizedMembers = normalizeConferenceMembers(members);
+        if (!normalizedMembers.includes(me)) {
+            normalizedMembers.push(me);
+        }
+
+        activeConference = {
+            initiator,
+            members: normalizedMembers,
+            ts: Date.now(),
+        };
+
+        addLine("🎛️ Приглашение в конференцию от " + initiator);
+        dbg("CONF invite accepted", activeConference);
+
+        for (const member of normalizedMembers) {
+            if (!shouldInitiateConferenceCall(me, member, initiator)) continue;
+            if (!isOnline(member)) continue;
+            if (isConnectedTo(member)) continue;
+            dbg("CONF auto-connect to", { member, initiator });
+            // eslint-disable-next-line no-await-in-loop
+            await startCallTo(member);
+        }
+
+        renderUsers(lastUsers);
     }
 
     function showIncomingModal(from) {
@@ -933,7 +988,21 @@
 
         if (targets.length < 2) return;
 
+        const members = [me, ...targets];
+
         addLine("🎛️ Конференция: " + targets.join(", "));
+
+        for (const target of targets) {
+            wsSend({
+                type: "webrtc",
+                payload: {
+                    t: "conf",
+                    from: me,
+                    to: target,
+                    members,
+                },
+            });
+        }
 
         // Запускаем соединение с каждым выбранным
         for (const t of targets) {
@@ -1044,6 +1113,7 @@
         selectedForConf.clear();
         pendingIncomingCall = null;
         pendingIce.clear();
+        activeConference = null;
         hideIncomingModal();
 
         appView.hidden = true;
